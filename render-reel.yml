@@ -1,0 +1,79 @@
+name: render-reel
+run-name: render ${{ inputs.job }}
+
+on:
+  workflow_dispatch:
+    inputs:
+      job:
+        description: unique job id (becomes the file name)
+        required: true
+      kind:
+        description: htmlreel or reel
+        required: true
+      audio_url:
+        description: voiceover mp3 url
+        required: true
+      fields:
+        description: htmlreel only, the 15 pipe separated art director fields
+        required: false
+        default: ""
+      script:
+        description: htmlreel only, the voiceover text
+        required: false
+        default: ""
+      video_url:
+        description: reel only, stock video file url
+        required: false
+        default: ""
+      headline:
+        description: reel only, headline text
+        required: false
+        default: ""
+      cta:
+        description: reel only, call to action text
+        required: false
+        default: ""
+
+permissions:
+  contents: write
+
+jobs:
+  render:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install renderer
+        run: |
+          sudo apt-get update -y
+          sudo apt-get install -y ffmpeg
+          pip install playwright
+          python -m playwright install --with-deps chromium
+
+      - name: Render
+        env:
+          JOB: ${{ inputs.job }}
+          KIND: ${{ inputs.kind }}
+          AUDIO_URL: ${{ inputs.audio_url }}
+          FIELDS: ${{ inputs.fields }}
+          SCRIPT: ${{ inputs.script }}
+          VIDEO_URL: ${{ inputs.video_url }}
+          HEADLINE: ${{ inputs.headline }}
+          CTA: ${{ inputs.cta }}
+        run: python render/render.py
+
+      - name: Publish to the "renders" release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          JOB: ${{ inputs.job }}
+        run: |
+          gh release view renders >/dev/null 2>&1 || gh release create renders --title "renders" --notes "Rendered reels (auto-cleaned)"
+          gh release upload renders "out/${JOB}.mp4" --clobber
+          # keep only the 60 newest videos
+          gh release view renders --json assets --jq '.assets | sort_by(.createdAt) | reverse | .[60:] | .[].name' \
+            | while read -r name; do gh release delete-asset renders "$name" -y; done

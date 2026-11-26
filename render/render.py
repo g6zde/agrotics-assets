@@ -111,7 +111,7 @@ function build(){
       d.innerHTML = e.html;
     }
     stage.appendChild(d);
-    items.push({e, d});
+    items.push({e, d, idx: items.length});
   }
 }
 
@@ -134,6 +134,17 @@ function fitAll(){
       size -= 2;
     }
     e.finalSize = size;
+  }
+}
+
+// stack elements that follow another element so lines can never overlap, even if a headline wraps
+function layoutStack(){
+  for(const it of items){
+    const e = it.e;
+    if(e.after == null) continue;
+    const prev = items.find(x => x.idx === e.after);
+    if(!prev) continue;
+    e.y = prev.e.y + prev.d.offsetHeight + (e.gap || 0);
   }
 }
 
@@ -174,6 +185,7 @@ async function ready(){
   })));
   build();
   fitAll();
+  layoutStack();
   setTime(0);
   window.__ready = true;
 }
@@ -272,10 +284,35 @@ def scene_times(script, audio_dur):
     return t1, t2, t3
 
 
+KEYS = ["theme", "ill1", "tag", "s1a", "s1b", "s1sub", "s2a", "s2b", "step1", "step2", "step3",
+        "s3a", "s3b", "s3sub", "ill3"]
+
+
+def parse_fields(raw):
+    """Return a 1-based list of the 15 art-director fields.
+
+    Preferred input is a JSON object with the keys in KEYS; the old pipe separated line is still
+    understood (and repaired when the model dropped a field but kept the trailing illustration).
+    """
+    raw = (raw or "").strip()
+    a, b = raw.find("{"), raw.rfind("}")
+    if a != -1 and b > a:
+        try:
+            d = json.loads(raw[a:b + 1])
+            return [""] + [clean(str(d.get(k, ""))) for k in KEYS]
+        except ValueError:
+            pass
+    parts = [clean(x) for x in raw.replace("\n", " ").split("|")]
+    if len(parts) < 15 and parts and parts[-1].lower() in ILLUSTRATIONS:
+        last = parts.pop()
+        parts += [""] * (14 - len(parts))
+        parts.append(last)
+    parts += [""] * (15 - len(parts))
+    return [""] + parts[:15]
+
+
 def htmlreel_spec(fields_raw, script, audio_dur):
-    f = [clean(x) for x in fields_raw.split("|")]
-    f += [""] * (15 - len(f))
-    f = [""] + f  # 1-based like the Make fields
+    f = parse_fields(fields_raw)
 
     theme = f[1].lower() if f[1].lower() in PALETTES else "dark"
     pal = PALETTES[theme]
@@ -322,14 +359,21 @@ def htmlreel_spec(fields_raw, script, audio_dur):
                 "w": .62 * W, "h": .62 * W * 130 / 900, "time": t2, "dur": t3 - t2,
                 "anims": [scale(1.2, .6, .6, 1.0, "out"), fade(1.2, .5)]})
 
-    def text(txt, x, y, size, weight, color, time, dur, anims, w=.86, ax=0, ay=0, align="left", fit=None, **kw):
+    def text(txt, x, y, size, weight, color, time, dur, anims, w=.86, ax=0, ay=0, align="left", fit=None,
+             after=None, gap=0, **kw):
+        if not txt or txt.strip().lower() in ILLUSTRATIONS:
+            return None
         e = {"kind": "text", "text": txt, "x": x * W, "y": y * H, "ax": ax, "ay": ay, "w": w * W,
              "size": size, "weight": weight, "color": color, "align": align, "time": time, "dur": dur,
              "anims": anims}
         if fit:
             e["fit"] = fit
+        if after is not None:
+            e["after"] = after
+            e["gap"] = gap
         e.update(kw)
         els.append(e)
+        return len(els) - 1
 
     # tag pill top-right
     text(f[3], .93, .08, 28, 700, bg, 0, t3, [scale(.1, .6, .7, 1.0, "out"), fade(.1, .5)],
@@ -338,13 +382,16 @@ def htmlreel_spec(fields_raw, script, audio_dur):
 
     # scene 1
     HEAD = dict(fit={"lines": 1, "min": .5}, lh=1.1)
-    text(f[4], .07, .60, 100, 800, fg, 0, t1, [slide(.9, .7, "up", .08 * H), fade(.9, .5)], **HEAD)
-    text(f[5], .07, .67, 100, 800, accent, 0, t1, [slide(1.3, .7, "up", .08 * H), fade(1.3, .5)], **HEAD)
-    text(f[6], .07, .755, 44, 500, muted, 0, t1, [fade(2.0, .7)], fit={"lines": 2, "min": .7})
+    a = text(f[4], .07, .60, 100, 800, fg, 0, t1, [slide(.9, .7, "up", .08 * H), fade(.9, .5)], **HEAD)
+    b = text(f[5], .07, .67, 100, 800, accent, 0, t1, [slide(1.3, .7, "up", .08 * H), fade(1.3, .5)],
+             after=a, gap=4, **HEAD)
+    text(f[6], .07, .755, 44, 500, muted, 0, t1, [fade(2.0, .7)], fit={"lines": 2, "min": .7},
+         after=b if b is not None else a, gap=28)
 
     # scene 2
-    text(f[7], .07, .15, 100, 800, fg, t1, t2 - t1, [slide(.2, .7, "up", .08 * H), fade(.2, .5)], **HEAD)
-    text(f[8], .07, .22, 100, 800, accent, t1, t2 - t1, [slide(.5, .7, "up", .08 * H), fade(.5, .5)], **HEAD)
+    a = text(f[7], .07, .15, 100, 800, fg, t1, t2 - t1, [slide(.2, .7, "up", .08 * H), fade(.2, .5)], **HEAD)
+    text(f[8], .07, .22, 100, 800, accent, t1, t2 - t1, [slide(.5, .7, "up", .08 * H), fade(.5, .5)],
+         after=a, gap=4, **HEAD)
     steps = [(.41, f[9], accent, 1.0), (.54, f[10], accent2, 1.7), (.67, f[11], accent, 2.4)]
     for i, (y, label, col, t0) in enumerate(steps, 1):
         els.append({"kind": "circle", "color": col, "x": .07 * W, "y": y * H, "ax": 0, "ay": 0,
@@ -357,9 +404,11 @@ def htmlreel_spec(fields_raw, script, audio_dur):
              fit={"lines": 2, "min": .6}, lh=1.1)
 
     # scene 3
-    text(f[12], .07, .48, 100, 800, fg, t2, t3 - t2, [slide(.7, .7, "up", .08 * H), fade(.7, .5)], **HEAD)
-    text(f[13], .07, .55, 100, 800, accent, t2, t3 - t2, [slide(1.1, .7, "up", .08 * H), fade(1.1, .5)], **HEAD)
-    text(f[14], .07, .64, 44, 500, muted, t2, t3 - t2, [fade(1.7, .7)], fit={"lines": 2, "min": .7})
+    a = text(f[12], .07, .48, 100, 800, fg, t2, t3 - t2, [slide(.7, .7, "up", .08 * H), fade(.7, .5)], **HEAD)
+    b = text(f[13], .07, .55, 100, 800, accent, t2, t3 - t2, [slide(1.1, .7, "up", .08 * H), fade(1.1, .5)],
+             after=a, gap=4, **HEAD)
+    text(f[14], .07, .64, 44, 500, muted, t2, t3 - t2, [fade(1.7, .7)], fit={"lines": 2, "min": .7},
+         after=b if b is not None else a, gap=28)
 
     return {"bg": bg, "elements": els, "duration": t3}
 
@@ -447,8 +496,8 @@ def main():
     adur = media_duration(voice)
     log("voice duration", adur)
 
-    x264 = ["-c:v", "libx264", "-preset", "slow", "-crf", "16", "-pix_fmt", "yuv420p",
-            "-profile:v", "high", "-movflags", "+faststart"]
+    x264 = ["-c:v", "libx264", "-preset", "slow", "-crf", "14", "-maxrate", "20M", "-bufsize", "40M",
+            "-pix_fmt", "yuv420p", "-profile:v", "high", "-movflags", "+faststart"]
     aac = ["-c:a", "aac", "-b:a", "192k", "-ar", "44100"]
 
     if kind == "htmlreel":
@@ -459,6 +508,8 @@ def main():
         run([FFMPEG, "-y", "-framerate", FPS, "-i", work / "frames" / "f%05d.png", "-i", voice,
              *x264, *aac, "-r", FPS, "-t", "%.2f" % dur, out])
     elif kind == "reel":
+        x264 = ["-c:v", "libx264", "-preset", "slow", "-crf", "17", "-maxrate", "12M", "-bufsize", "24M",
+                "-pix_fmt", "yuv420p", "-profile:v", "high", "-movflags", "+faststart"]
         bg = download(os.environ["VIDEO_URL"], work / "bg.mp4", min_bytes=20000)
         dur = max(8.0, adur + 0.6)
         spec = reel_spec(os.environ.get("HEADLINE", ""), os.environ.get("CTA", ""), dur)
